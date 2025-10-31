@@ -1,0 +1,216 @@
+version: '3.8'
+
+services:
+  # ClickHouse database
+  clickhouse:
+    image: clickhouse/clickhouse-server:23.8
+    container_name: backtest-clickhouse
+    ports:
+      - "18123:8123"
+      - "19000:9000"
+    environment:
+      CLICKHOUSE_DB: backtest
+      CLICKHOUSE_USER: backtest
+      CLICKHOUSE_PASSWORD: backtest123
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+      - ./schemas:/docker-entrypoint-initdb.d
+    networks:
+      - backtest-network
+
+  # Rust backtesting engine
+  rust-engine:
+    build:
+      context: ./rust-engine
+      dockerfile: Dockerfile
+      target: production
+    container_name: backtest-rust-engine
+    ports:
+      - "19090:9090"
+    environment:
+      RUST_LOG: info
+      ENGINE_PORT: 9090
+      CLICKHOUSE_URL: http://clickhouse:8123
+    volumes:
+      - engine_data:/app/data
+    depends_on:
+      - clickhouse
+    networks:
+      - backtest-network
+    command: ["sleep", "infinity"]
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+  # Go orchestration service
+  go-services:
+    build:
+      context: ./go-services
+      dockerfile: Dockerfile
+      target: production
+    container_name: backtest-go-services
+    ports:
+      - "18080:8080"  # HTTP API
+      - "19091:9091"  # gRPC
+    environment:
+      GO_ENV: production
+      HTTP_PORT: 8080
+      GRPC_PORT: 9091
+      CLICKHOUSE_URL: http://clickhouse:8123
+      RUST_ENGINE_URL: http://rust-engine:9090
+      NATS_URL: nats://nats:4222
+    volumes:
+      - service_data:/app/data
+    depends_on:
+      - clickhouse
+      - rust-engine
+      - nats
+    networks:
+      - backtest-network
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 4G
+        reservations:
+          cpus: '1'
+          memory: 2G
+
+  # Strategy screen - live tail of strategy logs
+  strategy-screen:
+    image: backtest-go-services:latest
+    container_name: backtest-strategy-screen
+    command: ["./strategy_screen"]
+    environment:
+      STRATEGY_LOG_FILE: /app/data/strategy.log
+    volumes:
+      - service_data:/app/data
+    depends_on:
+      - go-services
+    networks:
+      - backtest-network
+
+  # NATS messaging
+  nats:
+    image: nats:2.9-alpine
+    container_name: backtest-nats
+    ports:
+      - "14222:4222"
+      - "18222:8222"
+    command: >
+      --jetstream
+      --store_dir /data
+    volumes:
+      - nats_data:/data
+    networks:
+      - backtest-network
+
+  # Prometheus monitoring
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: backtest-prometheus
+    ports:
+      - "19092:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml
+      - ./monitoring/backtest_rules.yml:/etc/prometheus/backtest_rules.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=30d'
+      - '--web.enable-lifecycle'
+    networks:
+      - backtest-network
+
+  # Grafana dashboards
+  grafana:
+    image: grafana/grafana:10.1.0
+    container_name: backtest-grafana
+    ports:
+      - "13000:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin123
+      GF_USERS_ALLOW_SIGN_UP: false
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./monitoring/grafana/datasources:/etc/grafana/provisioning/datasources
+    depends_on:
+      - prometheus
+    networks:
+      - backtest-network
+
+  # Redis for caching
+  redis:
+    image: redis:7-alpine
+    container_name: backtest-redis
+    ports:
+      - "16379:6379"
+    command: redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    networks:
+      - backtest-network
+
+  # Node exporter for system metrics
+  node-exporter:
+    image: prom/node-exporter:v1.6.1
+    container_name: backtest-node-exporter
+    ports:
+      - "19100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - backtest-network
+
+  # Process exporter for detailed process metrics
+  process-exporter:
+    image: ncabatoff/process-exporter:0.7.10
+    container_name: backtest-process-exporter
+    ports:
+      - "19256:9256"
+    command:
+      - -procnames=backtest-engine,go-services,clickhouse-server
+    networks:
+      - backtest-network
+
+volumes:
+  clickhouse_data:
+    driver: local
+  engine_data:
+    driver: local
+  service_data:
+    driver: local
+  nats_data:
+    driver: local
+  prometheus_data:
+    driver: local
+  grafana_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  backtest-network:
+    driver: bridge
+    name: backtest-new-network
+    ipam:
+      config:
+        - subnet: 172.30.0.0/16
+

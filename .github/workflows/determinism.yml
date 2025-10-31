@@ -1,0 +1,39 @@
+name: Determinism Checks
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  determinism:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v3
+    
+    - name: Set up Go
+      uses: actions/setup-go@v3
+      with:
+        go-version: 1.21
+    
+    - name: Run determinism tests
+      run: |
+        cd go-services
+        go test -v ./services/engine -run TestDeterminism
+    
+    - name: Run parity suite
+      run: |
+        cd go-services
+        go test -v ./services/engine -run TestParitySuite
+    
+    - name: Performance benchmarks
+      run: |
+        cd go-services
+        go test -v ./services/engine -bench=.
+    
+    - name: Check for regressions
+      run: |
+        cd go-services
+        go test -v ./services/engine -run TestPerformanceRegression

@@ -1,0 +1,60 @@
+{
+  "golden_datasets": [
+    {
+      "name": "btc_1d_2023",
+      "description": "Bitcoin 1-day bars for 2023",
+      "symbol": "BTCUSDT",
+      "timeframe": "1d",
+      "start_time": 1672531200000,
+      "end_time": 1704067199000,
+      "expected_hash": "a1b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef123456",
+      "expected_trades": 45,
+      "expected_final_equity": "12500.50"
+    },
+    {
+      "name": "eth_1h_2023_q1",
+      "description": "Ethereum 1-hour bars for Q1 2023",
+      "symbol": "ETHUSDT",
+      "timeframe": "1h",
+      "start_time": 1672531200000,
+      "end_time": 1680307199000,
+      "expected_hash": "b2c3d4e5f6789012345678901234567890abcdef1234567890abcdef1234567",
+      "expected_trades": 127,
+      "expected_final_equity": "11800.25"
+    },
+    {
+      "name": "spy_1m_2023_jan",
+      "description": "SPY 1-minute bars for January 2023",
+      "symbol": "SPY",
+      "timeframe": "1m",
+      "start_time": 1672531200000,
+      "end_time": 1675209599000,
+      "expected_hash": "c3d4e5f6789012345678901234567890abcdef1234567890abcdef12345678",
+      "expected_trades": 89,
+      "expected_final_equity": "10250.75"
+    }
+  ],
+  "tv_parity_tests": [
+    {
+      "name": "btc_ema_rsi_tv",
+      "symbol": "BTCUSDT",
+      "timeframe": "1h",
+      "start_time": 1672531200000,
+      "end_time": 1675123199000,
+      "tv_csv_path": "data/tv_parity/btc_ema_rsi_2023_q1.csv",
+      "tolerance": "0.0001"
+    },
+    {
+      "name": "eth_bollinger_tv",
+      "symbol": "ETHUSDT",
+      "timeframe": "4h",
+      "start_time": 1672531200000,
+      "end_time": 1680307199000,
+      "tv_csv_path": "data/tv_parity/eth_bollinger_2023_q1.csv",
+      "tolerance": "0.0005"
+    }
+  ],
+  "tolerance": "0.0001",
+  "max_iterations": 10
+}
+

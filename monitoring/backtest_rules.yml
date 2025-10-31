@@ -1,0 +1,131 @@
+# Alerting rules for backtesting system
+
+groups:
+  - name: backtest_performance
+    rules:
+      # Performance budget alerts
+      - alert: BacktestExecutionTooSlow
+        expr: backtest_execution_time_seconds > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backtest execution taking too long"
+          description: "Backtest {{ $labels.job_id }} has been running for {{ $value }} seconds"
+
+      - alert: IndicatorCalculationSlow
+        expr: indicator_calculation_time_seconds > 10
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Indicator calculation performance degraded"
+          description: "Indicator {{ $labels.indicator_name }} calculation time is {{ $value }} seconds"
+
+      - alert: LowThroughput
+        expr: backtest_bars_per_second < 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Backtest throughput below target"
+          description: "Current throughput is {{ $value }} bars/second, target is 1000+"
+
+  - name: backtest_errors
+    rules:
+      - alert: BacktestFailures
+        expr: rate(backtest_failures_total[5m]) > 0.1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "High backtest failure rate"
+          description: "Backtest failure rate is {{ $value }} failures/second"
+
+      - alert: DeterminismViolation
+        expr: backtest_determinism_violations_total > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Determinism violation detected"
+          description: "Backtest {{ $labels.job_id }} failed determinism check"
+
+      - alert: DataGapsDetected
+        expr: data_gaps_total > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data gaps detected in market data"
+          description: "{{ $value }} data gaps detected for symbol {{ $labels.symbol }}"
+
+  - name: system_resources
+    rules:
+      - alert: HighMemoryUsage
+        expr: (node_memory_MemTotal_bytes - node_memory_MemAvailable_bytes) / node_memory_MemTotal_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage"
+          description: "Memory usage is {{ $value | humanizePercentage }}"
+
+      - alert: HighCPUUsage
+        expr: rate(node_cpu_seconds_total{mode="idle"}[5m]) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage"
+          description: "CPU usage is {{ $value | humanizePercentage }}"
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Low disk space"
+          description: "Disk space is {{ $value | humanizePercentage }} available"
+
+  - name: data_quality
+    rules:
+      - alert: DataQualityDegraded
+        expr: data_quality_score < 0.95
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Data quality degraded"
+          description: "Data quality score is {{ $value }} for snapshot {{ $labels.snapshot_id }}"
+
+      - alert: MissingMarketData
+        expr: up{job="clickhouse"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "ClickHouse unavailable"
+          description: "Cannot access market data - ClickHouse is down"
+
+  - name: strategy_execution
+    rules:
+      - alert: StrategyExecutionError
+        expr: rate(strategy_execution_errors_total[5m]) > 0.05
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High strategy execution error rate"
+          description: "Strategy {{ $labels.strategy_name }} error rate is {{ $value }} errors/second"
+
+      - alert: WASMRuntimeError
+        expr: wasm_runtime_errors_total > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: "WASM runtime error"
+          description: "WASM runtime error in strategy {{ $labels.strategy_name }}"
+

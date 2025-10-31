@@ -1,0 +1,49 @@
+# Prometheus configuration for backtesting system monitoring
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - "backtest_rules.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Backtesting service metrics
+  - job_name: 'backtest-service'
+    static_configs:
+      - targets: ['backtest-service:8080']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # Rust engine metrics
+  - job_name: 'rust-engine'
+    static_configs:
+      - targets: ['rust-engine:9090']
+    metrics_path: '/metrics'
+    scrape_interval: 5s
+
+  # ClickHouse metrics
+  - job_name: 'clickhouse'
+    static_configs:
+      - targets: ['clickhouse:8123']
+    metrics_path: '/metrics'
+    scrape_interval: 30s
+
+  # Node exporter for system metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 15s
+
+  # Process exporter for detailed process metrics
+  - job_name: 'process-exporter'
+    static_configs:
+      - targets: ['process-exporter:9256']
+    scrape_interval: 15s
+

@@ -1,0 +1,258 @@
+# GitHub Actions CI/CD Pipeline for Backtesting System
+
+name: Backtesting System CI/CD
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+  release:
+    types: [ published ]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  # Determinism Tests
+  determinism-tests:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        components: rustfmt, clippy
+        override: true
+    
+    - name: Install Go
+      uses: actions/setup-go@v4
+      with:
+        go-version: '1.21'
+    
+    - name: Cache Rust dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    
+    - name: Cache Go dependencies
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cache/go-build
+          ~/go/pkg/mod
+        key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+    
+    - name: Run Rust determinism tests
+      run: |
+        cd rust-engine
+        cargo test --release determinism_tests
+        cargo bench --release
+    
+    - name: Run Go tests
+      run: |
+        cd go-services
+        go test ./...
+        go vet ./...
+    
+    - name: Run determinism validation
+      run: |
+        cd tests
+        cargo run --release --bin determinism_tests -- --config config/determinism_tests.json
+
+  # Performance Tests
+  performance-tests:
+    runs-on: ubuntu-latest
+    needs: determinism-tests
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+    
+    - name: Run performance benchmarks
+      run: |
+        cd rust-engine
+        cargo bench --release -- --nocapture
+    
+    - name: Upload benchmark results
+      uses: actions/upload-artifact@v3
+      with:
+        name: benchmark-results
+        path: rust-engine/target/criterion/
+
+  # Security Scanning
+  security-scan:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Run Trivy vulnerability scanner
+      uses: aquasecurity/trivy-action@master
+      with:
+        scan-type: 'fs'
+        scan-ref: '.'
+        format: 'sarif'
+        output: 'trivy-results.sarif'
+    
+    - name: Upload Trivy scan results
+      uses: github/codeql-action/upload-sarif@v2
+      with:
+        sarif_file: 'trivy-results.sarif'
+
+  # Build and Test Docker Images
+  docker-build:
+    runs-on: ubuntu-latest
+    needs: [determinism-tests, security-scan]
+    strategy:
+      matrix:
+        service: [rust-engine, go-services]
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+    
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ env.REGISTRY }}
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@v5
+      with:
+        images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}/${{ matrix.service }}
+        tags: |
+          type=ref,event=branch
+          type=ref,event=pr
+          type=semver,pattern={{version}}
+          type=semver,pattern={{major}}.{{minor}}
+          type=sha,prefix={{branch}}-
+    
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./${{ matrix.service }}
+        file: ./${{ matrix.service }}/Dockerfile
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        platforms: linux/amd64,linux/arm64
+
+  # Integration Tests
+  integration-tests:
+    runs-on: ubuntu-latest
+    needs: docker-build
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:23.8
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_DB: market
+          CLICKHOUSE_USER: backtest
+          CLICKHOUSE_PASSWORD: backtest123
+        options: >-
+          --health-cmd "curl -f http://localhost:8123/ping || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Wait for ClickHouse
+      run: |
+        timeout 60 bash -c 'until curl -f http://localhost:8123/ping; do sleep 2; done'
+    
+    - name: Initialize ClickHouse schema
+      run: |
+        curl -X POST http://localhost:8123/ -d "CREATE DATABASE IF NOT EXISTS market"
+        curl -X POST http://localhost:8123/ -d "$(cat schemas/clickhouse_schema.sql)"
+    
+    - name: Run integration tests
+      run: |
+        cd tests/integration
+        cargo test --release integration_tests
+
+  # Deploy to Staging
+  deploy-staging:
+    runs-on: ubuntu-latest
+    needs: [docker-build, integration-tests]
+    if: github.ref == 'refs/heads/develop'
+    environment: staging
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to staging
+      run: |
+        echo "Deploying to staging environment..."
+        # Add staging deployment commands here
+
+  # Deploy to Production
+  deploy-production:
+    runs-on: ubuntu-latest
+    needs: [docker-build, integration-tests]
+    if: github.event_name == 'release'
+    environment: production
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Deploy to production
+      run: |
+        echo "Deploying to production environment..."
+        # Add production deployment commands here
+    
+    - name: Run smoke tests
+      run: |
+        echo "Running smoke tests..."
+        # Add smoke test commands here
+
+  # Performance Monitoring
+  performance-monitoring:
+    runs-on: ubuntu-latest
+    needs: deploy-production
+    if: github.event_name == 'release'
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Setup performance monitoring
+      run: |
+        echo "Setting up performance monitoring..."
+        # Add performance monitoring setup here
+    
+    - name: Run load tests
+      run: |
+        echo "Running load tests..."
+        # Add load test commands here
+
+  # Notification
+  notify:
+    runs-on: ubuntu-latest
+    needs: [deploy-production, performance-monitoring]
+    if: always()
+    steps:
+    - name: Notify deployment status
+      uses: 8398a7/action-slack@v3
+      with:
+        status: ${{ job.status }}
+        channel: '#deployments'
+        webhook_url: ${{ secrets.SLACK_WEBHOOK }}
+      env:
+        SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK }}
+
